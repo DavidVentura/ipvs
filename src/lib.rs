@@ -239,7 +239,9 @@ fn send_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::
 
             offset += msg.header.length as usize;
             if offset >= rxbuf.len() || msg.header.length == 0 {
-                break;
+                // FIXME this is probably wrong -- multi-message payloads would
+                // be cut short
+                return Ok(ret);
             }
         }
     }
