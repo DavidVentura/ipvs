@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-netlink-packet-ipvs = { path = "../netlink-packet-generic" }
+netlink-packet-ipvs = { path = "../netlink-packet-ipvs" }
 netlink-packet-generic = "0.3.3"
 netlink-packet-core = { version = "0.7.0" }
 netlink-packet-utils = { version = "0.5.2" }
