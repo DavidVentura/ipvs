@@ -7,6 +7,7 @@ use netlink_packet_generic::ctrl::nlas::GenlCtrlAttrs;
 use netlink_packet_generic::ctrl::{GenlCtrl, GenlCtrlCmd};
 use netlink_packet_generic::{GenlFamily, GenlMessage};
 pub use netlink_packet_ipvs::ctrl::nlas::destination::{Destination, ForwardTypeFull};
+use netlink_packet_ipvs::ctrl::nlas::service::ServiceExtended;
 pub use netlink_packet_ipvs::ctrl::nlas::service::{Flags, Netmask, Protocol, Scheduler, Service};
 pub use netlink_packet_ipvs::ctrl::nlas::AddressFamily;
 use netlink_packet_ipvs::ctrl::nlas::IpvsCtrlAttrs;
@@ -79,7 +80,7 @@ impl IpvsClient {
         send_buf(&self.socket, &txbuf)?;
         Ok(())
     }
-    pub fn update_service(&self, svc: &Service, to: &Service) -> std::io::Result<Service> {
+    pub fn update_service(&self, svc: &Service, to: &Service) -> std::io::Result<ServiceExtended> {
         let txbuf = IpvsServiceCtrl {
             cmd: IpvsCtrlCmd::SetService,
             nlas: vec![
@@ -102,7 +103,7 @@ impl IpvsClient {
             }
         }
     }
-    pub fn get_all_services(&self) -> std::io::Result<Vec<Service>> {
+    pub fn get_all_services(&self) -> std::io::Result<Vec<ServiceExtended>> {
         let txbuf = IpvsServiceCtrl {
             cmd: IpvsCtrlCmd::GetService,
             nlas: vec![],
@@ -156,7 +157,7 @@ impl IpvsClient {
         svc: &Service,
         dst: &Destination,
         to: &Destination,
-    ) -> std::io::Result<Service> {
+    ) -> std::io::Result<ServiceExtended> {
         let txbuf = IpvsServiceCtrl {
             cmd: IpvsCtrlCmd::SetDest,
             nlas: vec![
