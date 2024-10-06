@@ -2,7 +2,9 @@
 
 use std::error::Error;
 
-use netlink_packet_core::{NetlinkMessage, NetlinkPayload, NLM_F_DUMP, NLM_F_REQUEST};
+use netlink_packet_core::{
+    NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_MULTIPART, NLM_F_REQUEST,
+};
 use netlink_packet_generic::ctrl::nlas::GenlCtrlAttrs;
 use netlink_packet_generic::ctrl::{GenlCtrl, GenlCtrlCmd};
 use netlink_packet_generic::{GenlFamily, GenlMessage};
@@ -26,11 +28,11 @@ impl IpvsClient {
         socket.connect(&SocketAddr::new(0, 0))?;
         let mut genlmsg = GenlMessage::from_payload(GenlCtrl {
             cmd: GenlCtrlCmd::GetFamily,
-            nlas: vec![GenlCtrlAttrs::FamilyName("IPVS\0".to_string())],
+            nlas: vec![GenlCtrlAttrs::FamilyName("IPVS".to_string())],
         });
         genlmsg.finalize();
         let mut nlmsg = NetlinkMessage::from(genlmsg);
-        nlmsg.header.flags = NLM_F_REQUEST | NLM_F_DUMP;
+        nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK; //| NLM_F_DUMP; // | NLM_F_ACK;
         nlmsg.finalize();
         let mut txbuf = vec![0u8; nlmsg.buffer_len()];
         nlmsg.serialize(&mut txbuf);
@@ -200,18 +202,7 @@ impl IpvsClient {
         }
     }
     pub fn get_all_destinations(&self, svc: &Service) -> std::io::Result<Vec<DestinationExtended>> {
-        let nlas = svc
-            .create_nlas()
-            .iter()
-            .filter(|x| match *x {
-                SvcCtrlAttrs::Flags(_) => false,
-                SvcCtrlAttrs::Scheduler(_) => false,
-                SvcCtrlAttrs::Timeout(_) => false,
-                SvcCtrlAttrs::Netmask(_) => false,
-                _ => true,
-            })
-            .cloned() // fixme
-            .collect();
+        let nlas = svc.create_nlas();
         let txbuf = IpvsServiceCtrl {
             cmd: IpvsCtrlCmd::GetDest,
             nlas: vec![IpvsCtrlAttrs::Service(nlas)],
@@ -247,6 +238,7 @@ fn send_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::
         let (rxbuf, _) = socket.recv_from_full().unwrap();
 
         loop {
+            let mut was_ok = false;
             let buf = &rxbuf[offset..];
             let msg = <NetlinkMessage<GenlMessage<IpvsServiceCtrl>>>::deserialize(buf).unwrap();
 
@@ -261,6 +253,8 @@ fn send_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::
                     if err.code.is_some() {
                         let e = std::io::Error::from_raw_os_error(err.code.unwrap().get().abs());
                         return Err(e);
+                    } else {
+                        was_ok = true;
                     }
                 }
                 other => {
@@ -270,9 +264,16 @@ fn send_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::
 
             offset += msg.header.length as usize;
             if offset >= rxbuf.len() || msg.header.length == 0 {
-                // FIXME this is probably wrong -- multi-message payloads would
-                // be cut short
-                return Ok(ret);
+                if msg.header.flags & NLM_F_MULTIPART == NLM_F_MULTIPART {
+                    break;
+                }
+                if was_ok {
+                    return Ok(ret);
+                } else {
+                    // non-multipart but also last-message was not 'success'..
+                    // more data?
+                    break;
+                }
             }
         }
     }
@@ -287,6 +288,7 @@ fn send_fam_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<GenlCtrlAttrs>, std::
         let (rxbuf, _) = socket.recv_from_full().unwrap();
 
         loop {
+            let mut was_ok = false;
             let buf = &rxbuf[offset..];
             let msg = <NetlinkMessage<GenlMessage<GenlCtrl>>>::deserialize(buf).unwrap();
 
@@ -301,6 +303,8 @@ fn send_fam_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<GenlCtrlAttrs>, std::
                     if err.code.is_some() {
                         let e = std::io::Error::from_raw_os_error(err.code.unwrap().get().abs());
                         return Err(e);
+                    } else {
+                        was_ok = true;
                     }
                 }
                 other => {
@@ -310,7 +314,16 @@ fn send_fam_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<GenlCtrlAttrs>, std::
 
             offset += msg.header.length as usize;
             if offset >= rxbuf.len() || msg.header.length == 0 {
-                break;
+                if msg.header.flags & NLM_F_MULTIPART == NLM_F_MULTIPART {
+                    break;
+                }
+                if was_ok {
+                    return Ok(ret);
+                } else {
+                    // non-multipart but also last-message was not 'success'..
+                    // more data?
+                    break;
+                }
             }
         }
     }
