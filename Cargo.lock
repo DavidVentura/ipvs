@@ -22,7 +22,7 @@ checksum = "428d9aa8fbc0670b7b8d6030a7fadd0f86151cae55e4dbbece15f3780a3dfaf3"
 
 [[package]]
 name = "ipvs"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "netlink-packet-core",
  "netlink-packet-generic",
@@ -68,7 +68,9 @@ dependencies = [
 
 [[package]]
 name = "netlink-packet-ipvs"
-version = "0.3.3"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37ab2e44168a39cd9160b1b61ccac2012529a8590766dd044fa51936f8d93868"
 dependencies = [
  "anyhow",
  "byteorder",
