@@ -7,9 +7,9 @@ use netlink_packet_core::{NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_REQUE
 use netlink_packet_generic::ctrl::nlas::GenlCtrlAttrs;
 use netlink_packet_generic::ctrl::{GenlCtrl, GenlCtrlCmd};
 use netlink_packet_generic::{header::GenlHeader, GenlFamily, GenlMessage};
-use netlink_packet_ipvs::ctrl::nlas::destination::DestinationExtended;
+pub use netlink_packet_ipvs::ctrl::nlas::destination::DestinationExtended;
 pub use netlink_packet_ipvs::ctrl::nlas::destination::{Destination, ForwardTypeFull};
-use netlink_packet_ipvs::ctrl::nlas::service::ServiceExtended;
+pub use netlink_packet_ipvs::ctrl::nlas::service::ServiceExtended;
 pub use netlink_packet_ipvs::ctrl::nlas::service::{Flags, Netmask, Protocol, Scheduler, Service};
 pub use netlink_packet_ipvs::ctrl::nlas::AddressFamily;
 use netlink_packet_ipvs::ctrl::nlas::IpvsCtrlAttrs;
