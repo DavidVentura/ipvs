@@ -6,9 +6,10 @@ use netlink_packet_core::{NetlinkMessage, NetlinkPayload, NLM_F_DUMP, NLM_F_REQU
 use netlink_packet_generic::ctrl::nlas::GenlCtrlAttrs;
 use netlink_packet_generic::ctrl::{GenlCtrl, GenlCtrlCmd};
 use netlink_packet_generic::{GenlFamily, GenlMessage};
+use netlink_packet_ipvs::ctrl::nlas::destination::DestinationExtended;
 pub use netlink_packet_ipvs::ctrl::nlas::destination::{Destination, ForwardTypeFull};
-use netlink_packet_ipvs::ctrl::nlas::service::ServiceExtended;
 pub use netlink_packet_ipvs::ctrl::nlas::service::{Flags, Netmask, Protocol, Scheduler, Service};
+use netlink_packet_ipvs::ctrl::nlas::service::{ServiceExtended, SvcCtrlAttrs};
 pub use netlink_packet_ipvs::ctrl::nlas::AddressFamily;
 use netlink_packet_ipvs::ctrl::nlas::IpvsCtrlAttrs;
 use netlink_packet_ipvs::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
@@ -139,6 +140,22 @@ impl IpvsClient {
         send_buf(&self.socket, &txbuf)?;
         Ok(())
     }
+    /// Make destination not usable by the IPVS scheduler from this point on.
+    /// This allows the removal of connections without interrupting active flows
+    pub fn disable_destination(&self, svc: &Service, dst: &Destination) -> std::io::Result<()> {
+        let other = Destination {
+            weight: 0,
+            ..dst.clone()
+        };
+        self.update_destination(svc, dst, &other)?;
+        Ok(())
+    }
+
+    /// This function does NOT consider whether there are active connections to this destination
+    /// Consider the value of the `expire_nodest_conn` sysctl setting on your system before
+    /// calling this function.
+    /// To prevent disruption on active flows, call `disable_destination` on `dst` first, then
+    /// only call `delete_destination` once `dst.active_conns` is `0`.
     pub fn delete_destination(&self, svc: &Service, dst: &Destination) -> std::io::Result<()> {
         let txbuf = IpvsServiceCtrl {
             cmd: IpvsCtrlCmd::DelDest,
@@ -152,6 +169,7 @@ impl IpvsClient {
         send_buf(&self.socket, &txbuf)?;
         Ok(())
     }
+
     pub fn update_destination(
         &self,
         svc: &Service,
@@ -181,10 +199,22 @@ impl IpvsClient {
             }
         }
     }
-    pub fn get_all_destinations(&self, svc: &Service) -> std::io::Result<Vec<Destination>> {
+    pub fn get_all_destinations(&self, svc: &Service) -> std::io::Result<Vec<DestinationExtended>> {
+        let nlas = svc
+            .create_nlas()
+            .iter()
+            .filter(|x| match *x {
+                SvcCtrlAttrs::Flags(_) => false,
+                SvcCtrlAttrs::Scheduler(_) => false,
+                SvcCtrlAttrs::Timeout(_) => false,
+                SvcCtrlAttrs::Netmask(_) => false,
+                _ => true,
+            })
+            .cloned() // fixme
+            .collect();
         let txbuf = IpvsServiceCtrl {
             cmd: IpvsCtrlCmd::GetDest,
-            nlas: vec![IpvsCtrlAttrs::Service(svc.create_nlas())],
+            nlas: vec![IpvsCtrlAttrs::Service(nlas)],
             family_id: self.family_id,
         }
         .serialize(true);
@@ -197,7 +227,7 @@ impl IpvsClient {
                 }
                 IpvsCtrlAttrs::Destination(nlas) => {
                     // FIXME unwrap
-                    let s = Destination::from_nlas(&nlas).unwrap();
+                    let s = DestinationExtended::from_nlas(&nlas).unwrap();
                     ret.push(s);
                 }
             }
