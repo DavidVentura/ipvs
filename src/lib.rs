@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
 
 use std::error::Error;
+use std::fmt::Debug;
 
-use netlink_packet_core::{
-    NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_DUMP, NLM_F_MULTIPART, NLM_F_REQUEST,
-};
+use netlink_packet_core::{NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_REQUEST};
 use netlink_packet_generic::ctrl::nlas::GenlCtrlAttrs;
 use netlink_packet_generic::ctrl::{GenlCtrl, GenlCtrlCmd};
-use netlink_packet_generic::{GenlFamily, GenlMessage};
+use netlink_packet_generic::{header::GenlHeader, GenlFamily, GenlMessage};
 use netlink_packet_ipvs::ctrl::nlas::destination::DestinationExtended;
 pub use netlink_packet_ipvs::ctrl::nlas::destination::{Destination, ForwardTypeFull};
+use netlink_packet_ipvs::ctrl::nlas::service::ServiceExtended;
 pub use netlink_packet_ipvs::ctrl::nlas::service::{Flags, Netmask, Protocol, Scheduler, Service};
-use netlink_packet_ipvs::ctrl::nlas::service::{ServiceExtended, SvcCtrlAttrs};
 pub use netlink_packet_ipvs::ctrl::nlas::AddressFamily;
 use netlink_packet_ipvs::ctrl::nlas::IpvsCtrlAttrs;
-use netlink_packet_ipvs::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl};
+use netlink_packet_ipvs::ctrl::{IpvsCtrlCmd, IpvsServiceCtrl, Nlas};
+use netlink_packet_utils::traits::ParseableParametrized;
 use netlink_sys::{protocols::NETLINK_GENERIC, Socket, SocketAddr};
 
 pub struct IpvsClient {
@@ -32,11 +32,11 @@ impl IpvsClient {
         });
         genlmsg.finalize();
         let mut nlmsg = NetlinkMessage::from(genlmsg);
-        nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK; //| NLM_F_DUMP; // | NLM_F_ACK;
+        nlmsg.header.flags = NLM_F_REQUEST | NLM_F_ACK;
         nlmsg.finalize();
         let mut txbuf = vec![0u8; nlmsg.buffer_len()];
         nlmsg.serialize(&mut txbuf);
-        let r = send_fam_buf(&socket, &txbuf)?;
+        let r = send_buf::<GenlCtrl, GenlCtrlAttrs>(&socket, &txbuf)?;
         let mut family_id = 0;
         let mut good = false;
         let mut found = false;
@@ -70,7 +70,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(false);
-        send_buf(&self.socket, &txbuf)?;
+        send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         Ok(())
     }
     pub fn delete_service(&self, svc: &Service) -> std::io::Result<()> {
@@ -80,7 +80,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(false);
-        send_buf(&self.socket, &txbuf)?;
+        send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         Ok(())
     }
     pub fn update_service(&self, svc: &Service, to: &Service) -> std::io::Result<ServiceExtended> {
@@ -93,7 +93,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(false);
-        let mut r = send_buf(&self.socket, &txbuf)?;
+        let mut r = send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         assert!(r.len() == 1);
         let entry = r.pop().unwrap();
         match entry {
@@ -113,7 +113,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(true);
-        let r = send_buf(&self.socket, &txbuf)?;
+        let r = send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         let mut ret = vec![];
         for entry in r {
             match entry {
@@ -139,7 +139,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(false);
-        send_buf(&self.socket, &txbuf)?;
+        send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         Ok(())
     }
     /// Make destination not usable by the IPVS scheduler from this point on.
@@ -168,7 +168,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(false);
-        send_buf(&self.socket, &txbuf)?;
+        send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         Ok(())
     }
 
@@ -188,7 +188,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(false);
-        let mut r = send_buf(&self.socket, &txbuf)?;
+        let mut r = send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         assert!(r.len() == 1);
         let entry = r.pop().unwrap();
         match entry {
@@ -209,7 +209,7 @@ impl IpvsClient {
             family_id: self.family_id,
         }
         .serialize(true);
-        let r = send_buf(&self.socket, &txbuf)?;
+        let r = send_buf::<IpvsServiceCtrl, IpvsCtrlAttrs>(&self.socket, &txbuf)?;
         let mut ret = vec![];
         for entry in r {
             match entry {
@@ -227,9 +227,11 @@ impl IpvsClient {
     }
 }
 
-// TODO: send_buf and send_fam_buf should be generic
-// but `payloads.nlas` can't be accessed generically
-fn send_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::Error> {
+fn send_buf<T, K>(socket: &Socket, buf: &[u8]) -> Result<Vec<K>, std::io::Error>
+where
+    T: Debug + ParseableParametrized<[u8], GenlHeader> + for<'a> Nlas<'a, K>,
+    K: Clone,
+{
     socket.send(&buf, 0).unwrap();
 
     let mut ret = Vec::new();
@@ -238,23 +240,25 @@ fn send_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::
         let (rxbuf, _) = socket.recv_from_full().unwrap();
 
         loop {
-            let mut was_ok = false;
             let buf = &rxbuf[offset..];
-            let msg = <NetlinkMessage<GenlMessage<IpvsServiceCtrl>>>::deserialize(buf).unwrap();
+            let msg = <NetlinkMessage<GenlMessage<T>>>::deserialize(buf).unwrap();
+            offset += msg.header.length as usize;
 
             match msg.payload {
                 NetlinkPayload::Done(_) => {
+                    // This happens only on NLM_F_MULTIPART
                     return Ok(ret);
                 }
                 NetlinkPayload::InnerMessage(genlmsg) => {
-                    ret.extend_from_slice(&genlmsg.payload.nlas);
+                    ret.extend_from_slice(&genlmsg.payload.nlas());
                 }
                 NetlinkPayload::Error(err) => {
                     if err.code.is_some() {
                         let e = std::io::Error::from_raw_os_error(err.code.unwrap().get().abs());
                         return Err(e);
                     } else {
-                        was_ok = true;
+                        // A "success" message
+                        return Ok(ret);
                     }
                 }
                 other => {
@@ -262,68 +266,8 @@ fn send_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<IpvsCtrlAttrs>, std::io::
                 }
             }
 
-            offset += msg.header.length as usize;
             if offset >= rxbuf.len() || msg.header.length == 0 {
-                if msg.header.flags & NLM_F_MULTIPART == NLM_F_MULTIPART {
-                    break;
-                }
-                if was_ok {
-                    return Ok(ret);
-                } else {
-                    // non-multipart but also last-message was not 'success'..
-                    // more data?
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn send_fam_buf(socket: &Socket, buf: &[u8]) -> Result<Vec<GenlCtrlAttrs>, std::io::Error> {
-    socket.send(&buf, 0).unwrap();
-
-    let mut ret = Vec::new();
-    loop {
-        let mut offset = 0;
-        let (rxbuf, _) = socket.recv_from_full().unwrap();
-
-        loop {
-            let mut was_ok = false;
-            let buf = &rxbuf[offset..];
-            let msg = <NetlinkMessage<GenlMessage<GenlCtrl>>>::deserialize(buf).unwrap();
-
-            match msg.payload {
-                NetlinkPayload::Done(_) => {
-                    return Ok(ret);
-                }
-                NetlinkPayload::InnerMessage(genlmsg) => {
-                    ret.extend_from_slice(&genlmsg.payload.nlas);
-                }
-                NetlinkPayload::Error(err) => {
-                    if err.code.is_some() {
-                        let e = std::io::Error::from_raw_os_error(err.code.unwrap().get().abs());
-                        return Err(e);
-                    } else {
-                        was_ok = true;
-                    }
-                }
-                other => {
-                    println!("{:?}", other)
-                }
-            }
-
-            offset += msg.header.length as usize;
-            if offset >= rxbuf.len() || msg.header.length == 0 {
-                if msg.header.flags & NLM_F_MULTIPART == NLM_F_MULTIPART {
-                    break;
-                }
-                if was_ok {
-                    return Ok(ret);
-                } else {
-                    // non-multipart but also last-message was not 'success'..
-                    // more data?
-                    break;
-                }
+                break;
             }
         }
     }
